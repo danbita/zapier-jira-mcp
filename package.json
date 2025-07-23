@@ -1,0 +1,25 @@
+{
+  "name": "jira-mcp-agent-v2",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "ts-node index.ts",
+    "build": "tsc",
+    "dev": "ts-node --watch index.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.16.0",
+    "@types/node": "^24.0.15",
+    "dotenv": "^17.2.0",
+    "openai": "^5.10.1"
+  },
+  "devDependencies": {
+    "@types/dotenv": "^8.2.3",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
