@@ -38,7 +38,7 @@ export class IssueCreationFlow {
   getQuestionForStep(step: IssueCreationStep): string {
     switch (step) {
       case IssueCreationStep.ASKING_PROJECT:
-        return "I'll help you create a Jira issue! First, which project should this issue be created in? Please provide the project key (e.g., DEMO, TEST, PROJ).";
+        return "I'll help you create a Jira issue! First, which project should this issue be created in? Please choose from: FV Product, FV Engineering, FV Demo (Issues), or FV Demo (Product). You can also just say 'demo' for FV Demo (Issues).";
       
       case IssueCreationStep.ASKING_TYPE:
         return "What type of issue would you like to create? Please choose from: Bug, Task, Story, or Epic.";
@@ -50,7 +50,7 @@ export class IssueCreationFlow {
         return "Please provide a description for this issue. Include any relevant details, steps to reproduce (for bugs), or requirements (for features). You can also say 'skip' if you don't want to add a description.";
       
       case IssueCreationStep.ASKING_PRIORITY:
-        return "What priority should this issue have? Please choose from: Low, Medium, High, or Critical.";
+        return "What priority should this issue have? Please choose from: Lowest, Low, Medium, High, or Highest.";
       
       case IssueCreationStep.CONFIRMING_DETAILS:
         return "Please review the issue details above. Would you like me to create this issue? (yes/no)";
@@ -153,7 +153,7 @@ export class IssueCreationFlow {
     } else {
       return { 
         success: false, 
-        errorMessage: "Please specify one of the valid priorities: Low, Medium, High, or Critical." 
+        errorMessage: "Please specify one of the valid priorities: Lowest, Low, Medium, High, or Highest." 
       };
     }
   }
