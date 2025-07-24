@@ -9,6 +9,19 @@ export interface IssueData {
   export interface ConversationState {
     isCreatingIssue: boolean;
     issueData: IssueData;
+    currentStep: IssueCreationStep;
+    hasAskedFor: Set<string>;
+  }
+  
+  export enum IssueCreationStep {
+    DETECTING_INTENT = 'detecting_intent',
+    ASKING_PROJECT = 'asking_project',
+    ASKING_TYPE = 'asking_type', 
+    ASKING_TITLE = 'asking_title',
+    ASKING_DESCRIPTION = 'asking_description',
+    ASKING_PRIORITY = 'asking_priority',
+    CONFIRMING_DETAILS = 'confirming_details',
+    READY_TO_CREATE = 'ready_to_create'
   }
   
   export interface JiraIssue {
@@ -50,7 +63,6 @@ export interface IssueData {
       text: string;
     }>;
     isError?: boolean;
-    error?: any; // Optional error details for richer error reporting
   }
   
   export interface ZapierJiraCreateIssueArgs {
