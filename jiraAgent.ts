@@ -1,19 +1,24 @@
 import { Chatbot } from './chatbot';
-import { ConversationState, IssueData } from './types';
+import { ConversationState, IssueCreationStep } from './types';
 import { APP_CONFIG, OPENAI_API_KEY } from './config';
 import { ZapierService } from './zapierService';
+import { ConversationManager } from './conversationManager';
 
 export class JiraAgent {
   private chatbot: Chatbot;
   private zapierService: ZapierService;
+  private conversationManager: ConversationManager;
   private state: ConversationState = {
     isCreatingIssue: false,
-    issueData: {}
+    issueData: {},
+    currentStep: IssueCreationStep.DETECTING_INTENT,
+    hasAskedFor: new Set()
   };
 
   constructor() {
     this.chatbot = new Chatbot(OPENAI_API_KEY);
     this.zapierService = new ZapierService();
+    this.conversationManager = new ConversationManager();
   }
 
   async start(): Promise<void> {
@@ -47,18 +52,14 @@ export class JiraAgent {
         // Add user message to conversation history
         this.chatbot.addUserMessage(userInput);
 
-        // Get AI response
-        const response = await this.chatbot.getAIResponse();
-        
-        if (response) {
-          console.log(`\n🤖 Agent: ${response}\n`);
-          
-          // Add assistant response to conversation history
-          this.chatbot.addAssistantMessage(response);
+        // Process the user input through conversation manager
+        const result = await this.conversationManager.processUserInput(
+          userInput, 
+          this.state, 
+          this.chatbot
+        );
 
-          // Update conversation state based on response
-          await this.updateConversationState(userInput, response);
-        }
+        await this.handleConversationResult(result);
 
       } catch (error) {
         console.error('❌ An error occurred:', error);
@@ -70,286 +71,89 @@ export class JiraAgent {
     await this.cleanup();
   }
 
-  private async updateConversationState(userInput: string, aiResponse: string): Promise<void> {
-    // Simple state tracking for issue creation
-    const lowerInput = userInput.toLowerCase();
-    const lowerResponse = aiResponse.toLowerCase();
+  private async handleConversationResult(result: {
+    action: 'continue' | 'create_issue' | 'search' | 'cancel' | 'regular_chat';
+    message?: string;
+    searchQuery?: string;
+  }): Promise<void> {
+    switch (result.action) {
+      case 'continue':
+        if (result.message) {
+          console.log(`\n🤖 Agent: ${result.message}\n`);
+          this.chatbot.addAssistantMessage(result.message);
+        }
+        break;
 
-    // Detect if user wants to create an issue
-    if (lowerInput.includes('create') && (lowerInput.includes('issue') || lowerInput.includes('ticket'))) {
-      this.state.isCreatingIssue = true;
-      console.log('🎯 Issue creation mode activated');
-    }
+      case 'create_issue':
+        await this.executeIssueCreation();
+        break;
 
-    // Extract information from conversation if we're creating an issue
-    if (this.state.isCreatingIssue) {
-      await this.extractIssueData(userInput, aiResponse);
-      
-      // Check if we have enough information to create the issue
-      if (this.hasRequiredIssueData()) {
-        console.log('\n📋 All required information collected!');
-        await this.attemptIssueCreation();
-      }
-    }
+      case 'search':
+        if (result.searchQuery) {
+          await this.handleSearchRequest(result.searchQuery);
+        }
+        break;
 
-    // Handle search requests
-    if (lowerInput.includes('search') || lowerInput.includes('find')) {
-      if (lowerInput.includes('issue') || lowerInput.includes('ticket')) {
-        await this.handleSearchRequest(userInput);
-      }
+      case 'cancel':
+        if (result.message) {
+          console.log(`\n🤖 Agent: ${result.message}\n`);
+          this.chatbot.addAssistantMessage(result.message);
+        }
+        break;
+
+      case 'regular_chat':
+        await this.handleRegularConversation();
+        break;
     }
   }
 
-  private async extractIssueData(userInput: string, aiResponse: string): Promise<void> {
-    const lowerInput = userInput.toLowerCase();
-    
-    // Extract project information - look for common patterns
-    if (!this.state.issueData.project) {
-      const projectPatterns = [
-        /project\s+([A-Z]+\w*)/i,
-        /([A-Z]+\w*)\s+project/i,
-        /in\s+([A-Z]+\w*)/i,
-        /for\s+([A-Z]+\w*)/i
-      ];
-      
-      for (const pattern of projectPatterns) {
-        const match = userInput.match(pattern);
-        if (match) {
-          this.state.issueData.project = match[1].toUpperCase();
-          console.log(`📂 Project extracted: ${this.state.issueData.project}`);
-          break;
-        }
-      }
-    }
-
-    // Extract issue type with more patterns
-    if (!this.state.issueData.issueType) {
-      const typePatterns = [
-        /\b(bug|defect|issue)\b/i,
-        /\b(task|todo)\b/i,
-        /\b(story|feature|requirement)\b/i,
-        /\b(epic)\b/i,
-        /create\s+a\s+(\w+)/i
-      ];
-      
-      for (const pattern of typePatterns) {
-        const match = userInput.match(pattern);
-        if (match) {
-          const type = match[1].toLowerCase();
-          if (type === 'defect' || type === 'issue') {
-            this.state.issueData.issueType = 'Bug';
-          } else if (type === 'todo') {
-            this.state.issueData.issueType = 'Task';
-          } else if (type === 'feature' || type === 'requirement') {
-            this.state.issueData.issueType = 'Story';
-          } else {
-            this.state.issueData.issueType = type.charAt(0).toUpperCase() + type.slice(1);
-          }
-          console.log(`🏷️  Issue type extracted: ${this.state.issueData.issueType}`);
-          break;
-        }
-      }
-    }
-
-    // Extract priority with more patterns
-    if (!this.state.issueData.priority) {
-      const priorityPatterns = [
-        /\b(low|minor)\b/i,
-        /\b(medium|normal|standard)\b/i,
-        /\b(high|important|urgent)\b/i,
-        /\b(critical|blocker|severe)\b/i
-      ];
-      
-      for (const pattern of priorityPatterns) {
-        const match = userInput.match(pattern);
-        if (match) {
-          const priority = match[1].toLowerCase();
-          if (priority === 'minor') {
-            this.state.issueData.priority = 'Low';
-          } else if (priority === 'normal' || priority === 'standard') {
-            this.state.issueData.priority = 'Medium';
-          } else if (priority === 'important' || priority === 'urgent') {
-            this.state.issueData.priority = 'High';
-          } else if (priority === 'blocker' || priority === 'severe') {
-            this.state.issueData.priority = 'Critical';
-          } else {
-            this.state.issueData.priority = priority.charAt(0).toUpperCase() + priority.slice(1);
-          }
-          console.log(`⚡ Priority extracted: ${this.state.issueData.priority}`);
-          break;
-        }
-      }
-    }
-
-    // Enhanced title extraction
-    if (!this.state.issueData.title) {
-      // Look for quoted text first
-      const quotedMatch = userInput.match(/"([^"]+)"/);
-      if (quotedMatch) {
-        this.state.issueData.title = quotedMatch[1];
-        console.log(`📝 Title extracted from quotes: ${this.state.issueData.title}`);
-      } else {
-        // Remove common prefixes and extract meaningful content
-        let cleanedInput = userInput
-          .replace(/^(create|make|add|new)\s+(a\s+)?(bug|task|story|epic|issue|ticket)?\s*(in|for|about)?\s*/i, '')
-          .replace(/project\s+\w+/i, '')
-          .replace(/\b(high|low|medium|critical)\s+priority\b/i, '')
-          .trim();
-        
-        if (cleanedInput.length > 10 && cleanedInput.length < 150) {
-          // Take the first sentence or meaningful phrase
-          const firstSentence = cleanedInput.split(/[.!?]/)[0];
-          if (firstSentence.length > 5) {
-            this.state.issueData.title = firstSentence.trim();
-            console.log(`📝 Title extracted: ${this.state.issueData.title}`);
-          }
-        }
-      }
-    }
-
-    // Enhanced description extraction
-    if (!this.state.issueData.description && userInput.length > 30) {
-      // Use the full user input as description if it's substantial
-      if (!this.state.issueData.title || userInput !== this.state.issueData.title) {
-        this.state.issueData.description = userInput;
-        console.log('📄 Description captured from user input');
-      }
-    }
-
-    // Show current state
-    this.showCollectedInfo();
-  }
-
-  private showCollectedInfo(): void {
-    const collected = [];
-    const missing = [];
-
-    if (this.state.issueData.project) {
-      collected.push(`Project: ${this.state.issueData.project}`);
-    } else {
-      missing.push('project');
-    }
-
-    if (this.state.issueData.title) {
-      collected.push(`Title: ${this.state.issueData.title}`);
-    } else {
-      missing.push('title/summary');
-    }
-
-    if (this.state.issueData.issueType) {
-      collected.push(`Type: ${this.state.issueData.issueType}`);
-    }
-
-    if (this.state.issueData.priority) {
-      collected.push(`Priority: ${this.state.issueData.priority}`);
-    }
-
-    if (collected.length > 0) {
-      console.log(`📊 Collected: ${collected.join(', ')}`);
-    }
-
-    if (missing.length > 0 && this.state.isCreatingIssue) {
-      console.log(`❓ Still need: ${missing.join(', ')}`);
-    }
-  }
-
-  private hasRequiredIssueData(): boolean {
-    return !!(this.state.issueData.project && this.state.issueData.title);
-  }
-
-  private async attemptIssueCreation(): Promise<void> {
+  private async executeIssueCreation(): Promise<void> {
     if (!this.zapierService.isReady()) {
       console.log('❌ Cannot create issue: Zapier service not connected');
-      this.resetIssueState();
+      this.conversationManager.resetConversationState(this.state);
       return;
     }
 
     try {
-      // Check for similar issues first (bonus feature)
-      if (this.state.issueData.title) {
-        console.log('🔍 Checking for similar issues...');
-        const similarIssues = await this.zapierService.findSimilarIssues(
-          this.state.issueData.title,
-          this.state.issueData.description
-        );
-
-        if (similarIssues.length > 0) {
-          console.log('\n⚠️  Found potentially similar issues:');
-          similarIssues.forEach((issue, index) => {
-            console.log(`  ${index + 1}. ${issue.key}: ${issue.summary}`);
-          });
-          console.log('\nProceeding with creation anyway...\n');
-        }
-      }
-
-      // Create the issue using the MCP tool directly
-      console.log('🚀 Creating Jira issue with collected information...');
-      console.log('📋 Issue Details:');
-      console.log(`   Project: ${this.state.issueData.project}`);
-      console.log(`   Title: ${this.state.issueData.title}`);
-      console.log(`   Type: ${this.state.issueData.issueType || 'Task'}`);
-      console.log(`   Priority: ${this.state.issueData.priority || 'Medium'}`);
-      if (this.state.issueData.description) {
-        console.log(`   Description: ${this.state.issueData.description.substring(0, 100)}${this.state.issueData.description.length > 100 ? '...' : ''}`);
-      }
-      console.log('');
+      // Display what we're about to create
+      this.conversationManager.displayCreationDetails(this.state.issueData);
 
       // Execute the actual Jira creation via MCP
       const result = await this.zapierService.createJiraIssue(this.state.issueData);
       
       if (result.success) {
-        console.log('🎉 SUCCESS! Jira issue has been created!');
+        // Display success details
+        this.conversationManager.displaySuccessResult(result);
         
-        if (result.key) {
-          console.log(`📝 Issue Key: ${result.key}`);
-        }
-        
-        if (result.url) {
-          console.log(`🔗 Issue Link: ${result.url}`);
-        } else if (result.key) {
-          // Construct likely URL format (this may need adjustment based on your Jira instance)
-          console.log(`🔗 Issue Link: https://your-domain.atlassian.net/browse/${result.key}`);
-        }
-        
-        console.log(`📄 Response Details: ${result.response}`);
-        
-        // Inform the chatbot about the successful creation
-        this.chatbot.addAssistantMessage(
-          `✅ Great! I've successfully created your Jira issue with key ${result.key || 'N/A'}. The issue has been added to your Jira project and you can view it using the link above. Is there anything else you'd like me to help you with?`
-        );
+        // Add success message to chatbot
+        const successMessage = this.conversationManager.formatSuccessMessage(result, this.state.issueData);
+        this.chatbot.addAssistantMessage(successMessage);
         
       } else {
-        console.log('❌ Issue creation failed');
-        console.log(`Details: ${result.response || result.error || 'Unknown error'}`);
+        // Display failure details
+        this.conversationManager.displayFailureResult(result);
         
-        this.chatbot.addAssistantMessage(
-          `❌ I encountered an issue while creating your Jira ticket. The error was: ${result.response || result.error || 'Unknown error'}. Would you like to try again or modify any of the details?`
-        );
+        // Add error message to chatbot
+        const errorMessage = this.conversationManager.formatErrorMessage(result);
+        this.chatbot.addAssistantMessage(errorMessage);
       }
-      
-      console.log('');
 
     } catch (error) {
       console.error('❌ Failed to create Jira issue:', error);
-      console.log('Please check your issue details and Zapier MCP connection.\n');
-      
       this.chatbot.addAssistantMessage(
         `❌ I encountered a technical error while trying to create the Jira issue: ${error}. Please check your connection and try again.`
       );
     } finally {
-      this.resetIssueState();
+      this.conversationManager.resetConversationState(this.state);
     }
   }
 
-  private async handleSearchRequest(userInput: string): Promise<void> {
+  private async handleSearchRequest(searchQuery: string): Promise<void> {
     if (!this.zapierService.isReady()) {
       console.log('❌ Cannot search issues: Zapier service not connected');
       return;
     }
 
-    // Extract search query from user input
-    const searchQuery = userInput.replace(/search|find|for|issues?|tickets?/gi, '').trim();
-    
     if (searchQuery.length < 3) {
       console.log('Please provide a more specific search term.');
       return;
@@ -363,7 +167,7 @@ export class JiraAgent {
         console.log('No issues found matching your search.');
       } else {
         console.log(`\n📋 Found ${results.length} issue(s):`);
-        results.slice(0, 5).forEach((issue, index) => { // Show max 5 results
+        results.slice(0, 5).forEach((issue, index) => {
           console.log(`  ${index + 1}. ${issue.key}: ${issue.summary}`);
         });
         if (results.length > 5) {
@@ -377,10 +181,13 @@ export class JiraAgent {
     }
   }
 
-  private resetIssueState(): void {
-    this.state.isCreatingIssue = false;
-    this.state.issueData = {};
-    console.log('🔄 Ready for next operation\n');
+  private async handleRegularConversation(): Promise<void> {
+    const response = await this.chatbot.getAIResponse();
+    
+    if (response) {
+      console.log(`\n🤖 Agent: ${response}\n`);
+      this.chatbot.addAssistantMessage(response);
+    }
   }
 
   private async cleanup(): Promise<void> {
