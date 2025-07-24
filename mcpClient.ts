@@ -127,8 +127,7 @@ export class MCPClient {
           type: 'text',
           text: `Error calling tool ${toolCall.name}: ${getErrorMessage(error)}`
         }],
-        isError: true,
-        error: error instanceof Error ? { message: error.message, stack: error.stack } : error
+        isError: true
       };
     }
   }
