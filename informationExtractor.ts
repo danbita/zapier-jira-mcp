@@ -74,10 +74,51 @@ export class InformationExtractor {
   }
 
   extractProjectFromResponse(userInput: string): string | null {
+    // Map common project abbreviations to full project names
+    const projectMapping: { [key: string]: string } = {
+      'demo': 'FV Demo (Issues)',
+      'fvdemo': 'FV Demo (Issues)', 
+      'fv demo': 'FV Demo (Issues)',
+      'issues': 'FV Demo (Issues)',
+      'product': 'FV Demo (Product)',
+      'engineering': 'FV Engineering',
+      'eng': 'FV Engineering'
+    };
+    
+    const lowerInput = userInput.toLowerCase().trim();
+    
+    // Check for mapped abbreviations first
+    for (const [key, value] of Object.entries(projectMapping)) {
+      if (lowerInput.includes(key)) {
+        return value;
+      }
+    }
+    
+    // Check for exact full project names
+    const fullProjectNames = [
+      'FV Product',
+      'FV Engineering', 
+      'FV Demo (Issues)',
+      'FV Demo (Product)'
+    ];
+    
+    for (const projectName of fullProjectNames) {
+      if (userInput.includes(projectName)) {
+        return projectName;
+      }
+    }
+    
+    // Fallback to original logic for other cases
     const projectMatch = userInput.match(/\b([A-Z]+[A-Z0-9]*)\b/);
     if (projectMatch) {
-      return projectMatch[1].toUpperCase();
+      const match = projectMatch[1].toUpperCase();
+      // Map legacy project codes
+      if (match === 'DEMO') {
+        return 'FV Demo (Issues)';
+      }
+      return match;
     }
+    
     return null;
   }
 
@@ -101,14 +142,22 @@ export class InformationExtractor {
   extractPriorityFromResponse(userInput: string): string | null {
     const lowerInput = userInput.toLowerCase();
     const priorityMapping: { [key: string]: string } = {
+      'lowest': 'Lowest',
+      'very low': 'Lowest',
+      'trivial': 'Lowest',
       'low': 'Low',
+      'minor': 'Low',
       'medium': 'Medium',
       'normal': 'Medium',
+      'standard': 'Medium',
       'high': 'High',
       'important': 'High',
       'urgent': 'High',
-      'critical': 'Critical',
-      'blocker': 'Critical'
+      'major': 'High',
+      'highest': 'Highest',
+      'critical': 'Highest',
+      'blocker': 'Highest',
+      'severe': 'Highest'
     };
     
     for (const [key, value] of Object.entries(priorityMapping)) {
@@ -148,10 +197,11 @@ export class InformationExtractor {
   normalizePriority(priority: string): string {
     const normalized = priority.toLowerCase();
     switch (normalized) {
-      case 'low': return 'Low';
-      case 'medium': case 'normal': return 'Medium';
-      case 'high': case 'important': case 'urgent': return 'High';
-      case 'critical': case 'blocker': return 'Critical';
+      case 'lowest': case 'very low': case 'trivial': return 'Lowest';
+      case 'low': case 'minor': return 'Low';
+      case 'medium': case 'normal': case 'standard': return 'Medium';
+      case 'high': case 'important': case 'urgent': case 'major': return 'High';
+      case 'highest': case 'critical': case 'blocker': case 'severe': return 'Highest';
       default: return priority.charAt(0).toUpperCase() + priority.slice(1);
     }
   }
