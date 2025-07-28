@@ -50,7 +50,7 @@ export class IssueCreationFlow {
         return "Please provide a description for this issue. Include any relevant details, steps to reproduce (for bugs), or requirements (for features). You can also say 'skip' if you don't want to add a description.";
       
       case IssueCreationStep.ASKING_PRIORITY:
-        return "What priority should this issue have? Please choose from: Lowest, Low, Medium, High, or Highest.";
+        return "What priority should this issue have? Please choose from: Lowest, Low, Medium, High, or Highest. (Note: Priority may not apply to all issue types in your Jira configuration)";
       
       case IssueCreationStep.CONFIRMING_DETAILS:
         return "Please review the issue details above. Would you like me to create this issue? (yes/no)";
@@ -204,6 +204,10 @@ export class IssueCreationFlow {
     state.issueData = {};
     state.currentStep = IssueCreationStep.DETECTING_INTENT;
     state.hasAskedFor.clear();
+    // Clear AI extraction fields
+    state.extractedParameters = undefined;
+    state.missingParameters = undefined;
+    state.pendingValidation?.clear();
     console.log('🔄 Ready for next operation\n');
   }
 }
