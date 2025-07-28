@@ -12,7 +12,10 @@ export class JiraAgent {
     isCreatingIssue: false,
     issueData: {},
     currentStep: IssueCreationStep.DETECTING_INTENT,
-    hasAskedFor: new Set()
+    hasAskedFor: new Set(),
+    extractedParameters: undefined,
+    missingParameters: undefined,
+    pendingValidation: new Set()
   };
 
   constructor() {
