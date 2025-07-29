@@ -74,15 +74,32 @@ export class InformationExtractor {
   }
 
   extractProjectFromResponse(userInput: string): string | null {
-    // Map common project abbreviations to full project names
+    // IMPROVED: Enhanced project mapping to handle all 4 projects
     const projectMapping: { [key: string]: string } = {
+      // Demo projects
       'demo': 'FV Demo (Issues)',
       'fvdemo': 'FV Demo (Issues)', 
       'fv demo': 'FV Demo (Issues)',
+      'demo issues': 'FV Demo (Issues)',
       'issues': 'FV Demo (Issues)',
-      'product': 'FV Demo (Product)',
+      'dpi': 'FV Demo (Issues)',
+      
+      // Demo product
+      'demo product': 'FV Demo (Product)',
+      'fv demo product': 'FV Demo (Product)',
+      'product demo': 'FV Demo (Product)',
+      'dpd': 'FV Demo (Product)',
+      
+      // Engineering
       'engineering': 'FV Engineering',
-      'eng': 'FV Engineering'
+      'eng': 'FV Engineering',
+      'fv engineering': 'FV Engineering',
+      'fv eng': 'FV Engineering',
+      
+      // Product
+      'product': 'FV Product',
+      'fv product': 'FV Product',
+      'prod': 'FV Product'
     };
     
     const lowerInput = userInput.toLowerCase().trim();
@@ -90,11 +107,12 @@ export class InformationExtractor {
     // Check for mapped abbreviations first
     for (const [key, value] of Object.entries(projectMapping)) {
       if (lowerInput.includes(key)) {
+        console.log(`📂 Mapped "${key}" → "${value}"`);
         return value;
       }
     }
     
-    // Check for exact full project names
+    // Check for exact full project names (case-insensitive)
     const fullProjectNames = [
       'FV Product',
       'FV Engineering', 
@@ -103,19 +121,44 @@ export class InformationExtractor {
     ];
     
     for (const projectName of fullProjectNames) {
-      if (userInput.includes(projectName)) {
+      if (lowerInput.includes(projectName.toLowerCase())) {
+        console.log(`📂 Found exact match: "${projectName}"`);
         return projectName;
       }
     }
     
-    // Fallback to original logic for other cases
+    // Try partial matches for project names
+    if (lowerInput.includes('fv product') || lowerInput.includes('fanvoice product')) {
+      return 'FV Product';
+    }
+    if (lowerInput.includes('fv engineering') || lowerInput.includes('fanvoice engineering')) {
+      return 'FV Engineering';
+    }
+    if (lowerInput.includes('fv demo') && lowerInput.includes('product')) {
+      return 'FV Demo (Product)';
+    }
+    if (lowerInput.includes('fv demo') && (lowerInput.includes('issues') || !lowerInput.includes('product'))) {
+      return 'FV Demo (Issues)';
+    }
+    
+    // Fallback to original logic for other cases (project keys)
     const projectMatch = userInput.match(/\b([A-Z]+[A-Z0-9]*)\b/);
     if (projectMatch) {
       const match = projectMatch[1].toUpperCase();
-      // Map legacy project codes
-      if (match === 'DEMO') {
-        return 'FV Demo (Issues)';
+      // Map known legacy project codes
+      const legacyMapping: { [key: string]: string } = {
+        'DEMO': 'FV Demo (Issues)',
+        'DPI': 'FV Demo (Issues)',
+        'DPD': 'FV Demo (Product)',
+        'ENG': 'FV Engineering',
+        'PROD': 'FV Product'
+      };
+      
+      if (legacyMapping[match]) {
+        console.log(`📂 Mapped legacy code "${match}" → "${legacyMapping[match]}"`);
+        return legacyMapping[match];
       }
+      
       return match;
     }
     
