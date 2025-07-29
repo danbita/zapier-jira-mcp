@@ -4,11 +4,12 @@ A conversational AI agent that creates and manages Jira issues through natural l
 
 ## ✨ Features
 
-- **Natural Language Issue Creation** - Just describe what you need: *"Create a bug in project Demo about login not working"*
-- **Guided Conversations** - Agent asks follow-up questions to gather all required details
+- **Smart Issue Creation** - Just describe what you need: *"Create a bug in FV Engineering about login not working"*
+- **Intelligent Defaults** - Automatically sets sensible defaults (Bug type, FV Demo Issues project, Medium priority)
+- **Minimal Questions** - Only asks for title and description if missing
+- **Multi-Project Support** - Create issues in FV Demo (Issues), FV Demo (Product), FV Engineering, or FV Product
 - **Real Jira Integration** - Creates actual issues in your Jira workspace
 - **Issue Search** - Find existing issues to avoid duplicates
-- **Smart Data Extraction** - Automatically detects projects, priorities, and issue types from your messages
 
 ## 🚀 Quick Start
 
@@ -50,38 +51,44 @@ A conversational AI agent that creates and manages Jira issues through natural l
 
 ## 💬 How to Use
 
-### Creating Issues
+### Quick Issue Creation
 ```
-You: Hello, I need to create a new issue
-Agent: I'll help you create a Jira issue! Which project should this go in?
-You: Demo project
-Agent: What type of issue? Bug, Task, Story, or Epic?
-You: Bug
+You: Create a bug in FV Engineering about API timeout
 Agent: What should be the title of this issue?
-You: Login button not responding on mobile
+You: API Gateway timeout errors
 Agent: Please provide a description...
-You: Users can't tap the login button on iPhone Safari
-Agent: What priority? Lowest, Low, Medium, High, or Highest?
-You: High
-Agent: [Shows summary] Would you like me to create this issue? (yes/no)
-You: yes
-Agent: ✅ Issue DPI-1050 created successfully!
-       🔗 https://yourcompany.atlassian.net/browse/DPI-1050
+You: Users experiencing 30-second timeouts on API calls
+Agent: ✅ Issue ENG-1234 created successfully!
+```
+
+### Smart Defaults
+The agent automatically applies defaults when not specified:
+- **Type**: Bug
+- **Project**: FV Demo (Issues) 
+- **Priority**: Medium
+
+### Supported Projects
+- **FV Demo (Issues)** - General bug reports and issues
+- **FV Demo (Product)** - Product-related work  
+- **FV Engineering** - Engineering tasks and bugs
+- **FV Product** - Product management items
+
+### Project Shortcuts
+```
+"engineering" → FV Engineering
+"demo product" → FV Demo (Product)
+"product" → FV Product
+"demo" or "issues" → FV Demo (Issues)
 ```
 
 ### Searching Issues
 ```
 You: Find issues about login problems
 Agent: 🔍 Found 3 issue(s):
-       1. DPI-1050: Login button not responding on mobile
-       2. DPI-1023: Login timeout errors
-       3. DPI-1015: Login form validation issues
+       1. ENG-1050: Login button not responding on mobile
+       2. ENG-1023: Login timeout errors
+       3. DEMO-1015: Login form validation issues
 ```
-
-### Quick Commands
-- Say **"exit"** to quit
-- Say **"cancel"** during issue creation to abort
-- Use **quotes** for exact titles: *"Create issue titled 'Fix header styling'"*
 
 ## 🏗️ Architecture
 
@@ -89,63 +96,49 @@ Agent: 🔍 Found 3 issue(s):
 ├── index.ts                 # Main entry point
 ├── jiraAgent.ts            # Core agent orchestrator
 ├── conversationManager.ts  # Conversation flow management  
-├── issueCreationFlow.ts    # Step-by-step issue creation
-├── informationExtractor.ts # Parse user input for data
+├── aiParameterExtractor.ts # AI-powered parameter extraction
+├── informationExtractor.ts # Fallback parameter parsing
+├── issueCreationFlow.ts    # Traditional step-by-step flow
 ├── zapierService.ts        # Jira operations via Zapier MCP
 ├── mcpClient.ts           # MCP protocol handler
 ├── chatbot.ts             # OpenAI integration
-├── types.ts               # TypeScript type definitions
+├── types.ts               # TypeScript definitions
 └── config.ts              # Configuration and environment
 ```
 
-## 🔧 Configuration
+## 🔧 How It Works
 
-### Jira Project Setup
-Make sure your Jira projects have the standard issue types:
-- **Bug** - For defects and problems
-- **Task** - For work items (supports priority)
-- **Story** - For features and requirements  
-- **Epic** - For large initiatives
-
-### Priority Levels
-The agent supports these priority levels:
-- **Lowest** - Minor issues
-- **Low** - Small problems
-- **Medium** - Standard priority
-- **High** - Important issues
-- **Highest** - Critical problems
-
-*Note: Priority may only apply to certain issue types depending on your Jira configuration.*
-
-## 🛠️ Development
-
-### Project Structure
-The codebase is modular for easy maintenance:
-- Each file has a single responsibility
-- Clean separation between conversation, data extraction, and API calls
-- TypeScript for type safety and better development experience
-
-### Adding Features
-- **New conversation flows**: Extend `conversationManager.ts`
-- **Additional Jira operations**: Add methods to `zapierService.ts`
-- **Enhanced data extraction**: Improve patterns in `informationExtractor.ts`
+1. **AI Parameter Extraction** - Uses GPT-4 to extract project, type, priority, title, and description from natural language
+2. **Smart Defaults** - Automatically fills missing type, project, and priority with sensible defaults
+3. **Targeted Questions** - Only asks follow-up questions for missing title and description
+4. **Project Validation** - Ensures valid project selection with fuzzy matching and abbreviation support
+5. **Jira Integration** - Creates real issues via Zapier MCP with full metadata
 
 ## 📝 Example Interactions
 
-**Quick Issue Creation:**
+**All-in-one creation:**
 ```
-You: Create a high priority task in Engineering project about updating documentation
-Agent: [Extracts: project=Engineering, type=Task, priority=High]
-       What should be the title of this issue?
-You: Update API documentation for new endpoints
-Agent: [Continues with description, then creates issue]
+You: Create a high priority task in FV Product titled "Update user onboarding" with description "Redesign the welcome flow for new users"
+Agent: ✅ Issue PROD-567 created successfully!
 ```
 
-**Smart Project Detection:**
+**Smart defaults:**
 ```
-You: I need a bug for the demo project
-Agent: [Recognizes "demo" → maps to "FV Demo (Issues)" project]
-       What should be the title of this bug?
+You: Make an issue about broken search functionality
+Agent: [Applies defaults: Bug type, FV Demo Issues project, Medium priority]
+       What should be the title of this issue?
+You: Search returns no results
+Agent: Please provide a description...
+You: Search bar not working on main page
+Agent: ✅ Issue DPI-890 created successfully!
+```
+
+**Project-specific:**
+```
+You: Add a story to engineering for API rate limiting
+Agent: What should be the title of this issue?
+You: Implement API rate limiting middleware
+Agent: ✅ Issue ENG-445 created successfully!
 ```
 
 ## 🆘 Troubleshooting
@@ -154,13 +147,21 @@ Agent: [Recognizes "demo" → maps to "FV Demo (Issues)" project]
 - Verify your `.env` file has correct API keys
 - Test your Zapier MCP connection at [mcp.zapier.com](https://mcp.zapier.com)
 
-**Permission Errors:**
-- Ensure your Zapier account has access to create issues in the target Jira project
-- Check that your Jira user has the necessary permissions
+**Project Not Found:**
+- Use full project names or supported abbreviations
+- Valid projects: FV Demo (Issues), FV Demo (Product), FV Engineering, FV Product
 
-**Priority Not Showing:**
-- Some issue types (like Bugs) may not support priority in your Jira configuration
-- Priority works correctly for Tasks in most setups
+**AI Extraction Issues:**
+- Be specific about project location: "in [project]" or "for [project]"
+- Use clear language: "Create a bug in FV Engineering about..."
+
+## 🎯 Key Improvements
+
+- **Streamlined Flow**: Maximum 2 questions vs. traditional 5
+- **AI-Powered**: Intelligent parameter extraction from natural language
+- **Multi-Project**: Support for all 4 FanVoice projects with smart routing
+- **Context-Aware**: Distinguishes between similar project names accurately
+- **Fallback System**: Traditional step-by-step flow if AI extraction fails
 
 ## 📄 License
 
