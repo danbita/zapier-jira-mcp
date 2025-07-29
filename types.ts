@@ -11,10 +11,15 @@ export interface IssueData {
     issueData: IssueData;
     currentStep: IssueCreationStep;
     hasAskedFor: Set<string>;
+    // AI extraction fields
+    extractedParameters?: any;
+    missingParameters?: string[];
+    pendingValidation?: Set<string>;
   }
   
   export enum IssueCreationStep {
     DETECTING_INTENT = 'detecting_intent',
+    AI_EXTRACTING = 'ai_extracting',
     ASKING_PROJECT = 'asking_project',
     ASKING_TYPE = 'asking_type', 
     ASKING_TITLE = 'asking_title',
@@ -37,6 +42,15 @@ export interface IssueData {
     updated: string;
   }
   
+  // NEW: Interface for Jira projects
+  export interface JiraProject {
+    key: string;
+    name: string;
+    id: string;
+    type?: string;
+    description?: string;
+  }
+  
   export enum IssueType {
     BUG = 'Bug',
     TASK = 'Task',
@@ -45,10 +59,11 @@ export interface IssueData {
   }
   
   export enum Priority {
+    LOWEST = 'Lowest',
     LOW = 'Low',
     MEDIUM = 'Medium',
     HIGH = 'High',
-    CRITICAL = 'Critical'
+    HIGHEST = 'Highest'
   }
   
   // MCP and Zapier specific types
@@ -79,4 +94,10 @@ export interface IssueData {
     summary?: string;
     key?: string;
     jql?: string;
+  }
+  
+  // NEW: Interface for project search arguments
+  export interface ZapierJiraProjectSearchArgs {
+    instructions: string;
+    searchByParameter?: string;
   }
