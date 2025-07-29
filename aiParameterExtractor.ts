@@ -4,7 +4,7 @@ import { OPENAI_API_KEY } from './config';
 export interface ExtractedParameter {
   value: string | null;
   confidence: number;
-  source: 'ai_extracted' | 'user_confirmed' | 'follow_up_question';
+  source: 'ai_extracted' | 'user_confirmed' | 'follow_up_question' | 'default';
 }
 
 export interface ExtractedParameters {
@@ -26,14 +26,17 @@ export class AIParameterExtractor {
     try {
       console.log('🤖 Analyzing user input with AI...');
       
-      const extractionPrompt = this.buildExtractionPrompt(userInput);
+      // Pre-process input to help AI better identify project location
+      const preprocessedInput = this.preprocessProjectMentions(userInput);
+      
+      const extractionPrompt = this.buildExtractionPrompt(preprocessedInput);
       
       const completion = await this.openai.chat.completions.create({
         model: 'gpt-4o-mini',
         messages: [
           {
             role: 'system',
-            content: 'You are an expert at extracting structured data from natural language requests for Jira issue creation. Always respond with valid JSON only.'
+            content: 'You are an expert at extracting structured data from natural language requests for Jira issue creation. Pay special attention to project names that appear after location words like "in", "for", "to". Always respond with valid JSON only.'
           },
           {
             role: 'user',
@@ -52,14 +55,58 @@ export class AIParameterExtractor {
       console.log('📋 AI extraction response:', response);
       
       const extracted = this.parseAIResponse(response);
-      this.logExtractionResults(extracted);
       
-      return extracted;
+      // Apply defaults for missing parameters
+      const extractedWithDefaults = this.applyDefaults(extracted);
+      
+      this.logExtractionResults(extractedWithDefaults);
+      
+      return extractedWithDefaults;
 
     } catch (error) {
       console.error('❌ AI extraction failed:', error);
-      return this.createEmptyExtraction();
+      return this.createDefaultExtraction();
     }
+  }
+
+  // NEW: Preprocess input to highlight project mentions for better AI extraction
+  private preprocessProjectMentions(userInput: string): string {
+    let processed = userInput;
+    
+    // Add explicit markers around project mentions to help AI identify them
+    const projectPatterns = [
+      { pattern: /\bin\s+(fv\s+demo\s+product)\b/gi, replacement: 'in [PROJECT:FV Demo Product]' },
+      { pattern: /\bin\s+(demo\s+product)\b/gi, replacement: 'in [PROJECT:FV Demo Product]' },
+      { pattern: /\bin\s+(fv\s+product)\b/gi, replacement: 'in [PROJECT:FV Product]' },
+      { pattern: /\bin\s+(fv\s+engineering)\b/gi, replacement: 'in [PROJECT:FV Engineering]' },
+      { pattern: /\bin\s+(engineering)\b/gi, replacement: 'in [PROJECT:FV Engineering]' },
+      { pattern: /\bin\s+(fv\s+demo\s+issues)\b/gi, replacement: 'in [PROJECT:FV Demo Issues]' },
+      { pattern: /\bin\s+(demo\s+issues)\b/gi, replacement: 'in [PROJECT:FV Demo Issues]' },
+      { pattern: /\bin\s+(demo)\b/gi, replacement: 'in [PROJECT:FV Demo Issues]' },
+      
+      // Handle "for" and "to" patterns as well
+      { pattern: /\bfor\s+(fv\s+demo\s+product)\b/gi, replacement: 'for [PROJECT:FV Demo Product]' },
+      { pattern: /\bfor\s+(demo\s+product)\b/gi, replacement: 'for [PROJECT:FV Demo Product]' },
+      { pattern: /\bfor\s+(fv\s+product)\b/gi, replacement: 'for [PROJECT:FV Product]' },
+      { pattern: /\bfor\s+(fv\s+engineering)\b/gi, replacement: 'for [PROJECT:FV Engineering]' },
+      { pattern: /\bfor\s+(engineering)\b/gi, replacement: 'for [PROJECT:FV Engineering]' },
+      
+      { pattern: /\bto\s+(fv\s+demo\s+product)\b/gi, replacement: 'to [PROJECT:FV Demo Product]' },
+      { pattern: /\bto\s+(demo\s+product)\b/gi, replacement: 'to [PROJECT:FV Demo Product]' },
+      { pattern: /\bto\s+(fv\s+product)\b/gi, replacement: 'to [PROJECT:FV Product]' },
+      { pattern: /\bto\s+(fv\s+engineering)\b/gi, replacement: 'to [PROJECT:FV Engineering]' },
+      { pattern: /\bto\s+(engineering)\b/gi, replacement: 'to [PROJECT:FV Engineering]' }
+    ];
+    
+    for (const { pattern, replacement } of projectPatterns) {
+      if (pattern.test(processed)) {
+        processed = processed.replace(pattern, replacement);
+        console.log(`🔍 Preprocessed: "${userInput}" → "${processed}"`);
+        break; // Only apply the first match to avoid conflicts
+      }
+    }
+    
+    return processed;
   }
 
   private buildExtractionPrompt(userInput: string): string {
@@ -71,9 +118,24 @@ Extract these parameters ONLY if they are clearly and explicitly mentioned:
 
 TITLE: The issue title/summary (exact text in quotes, or clear subject)
 TYPE: Must be exactly one of: Bug, Task, Story, Epic (case-sensitive)
-PROJECT: Project name, code, or identifier (common abbreviations: demo→Demo, eng→Engineering)
+PROJECT: Project name ONLY if mentioned with "in", "for", "to" keywords. Look for these exact patterns:
+- "in [project name]" or "in the [project name]" 
+- "for [project name]" or "for the [project name]"
+- "to [project name]" or "to the [project name]"
+Valid project names: "FV Demo Product", "FV Demo Issues", "FV Engineering", "FV Product", "demo product", "demo issues", "engineering", "product"
 PRIORITY: Must be exactly one of: Lowest, Low, Medium, High, Highest (case-sensitive)  
-DESCRIPTION: Detailed explanation, steps to reproduce, or additional context
+DESCRIPTION: Detailed explanation, steps to reproduce, or additional context (usually after "description is" or "whose description is")
+
+CRITICAL: When extracting PROJECT, pay close attention to the exact phrase after "in", "for", or "to":
+- "in fv demo product" → "FV Demo Product" 
+- "in fv product" → "FV Product"
+- "in fv demo issues" → "FV Demo Issues" 
+- "in fv engineering" → "FV Engineering"
+- "in engineering" → "FV Engineering"
+- "in demo product" → "FV Demo Product"
+- "in demo issues" → "FV Demo Issues"
+
+DO NOT extract project from description text or other parts of the sentence. Only from location indicators.
 
 Confidence scoring (0.0-1.0):
 - 1.0: Explicitly stated with clear keywords
@@ -87,15 +149,16 @@ RESPOND WITH VALID JSON ONLY:
 {
   "title": { "value": "extracted title" | null, "confidence": 0.9 },
   "type": { "value": "Bug" | null, "confidence": 0.8 },
-  "project": { "value": "Demo" | null, "confidence": 0.7 },
+  "project": { "value": "FV Demo Product" | null, "confidence": 0.7 },
   "priority": { "value": "High" | null, "confidence": 0.6 },
   "description": { "value": "extracted description" | null, "confidence": 0.5 }
 }
 
 Examples:
 - "Create a bug called 'Login broken'" → title: "Login broken", type: "Bug"
-- "High priority task for demo project" → type: "Task", priority: "High", project: "Demo"
-- "Make an issue about API timeout with detailed error logs" → title: "API timeout", description: "detailed error logs"
+- "High priority task for demo project" → type: "Task", priority: "High", project: null
+- "Make an issue in FV Engineering about API timeout" → title: "API timeout", project: "FV Engineering"
+- "Create issue in fv demo product called test" → title: "test", project: "FV Demo Product"
 
 DO NOT invent information. Only extract what is clearly present. Use null for missing parameters.`;
   }
@@ -154,13 +217,57 @@ DO NOT invent information. Only extract what is clearly present. Use null for mi
     };
   }
 
+  private createDefaultExtraction(): ExtractedParameters {
+    return {
+      title: { value: null, confidence: 0, source: 'ai_extracted' },
+      type: { value: 'Bug', confidence: 1.0, source: 'default' },
+      project: { value: 'FV Demo (Issues)', confidence: 1.0, source: 'default' },
+      priority: { value: 'Medium', confidence: 1.0, source: 'default' },
+      description: { value: null, confidence: 0, source: 'ai_extracted' }
+    };
+  }
+
+  // NEW: Apply defaults for missing parameters
+  private applyDefaults(extracted: ExtractedParameters): ExtractedParameters {
+    const result = { ...extracted };
+
+    // Apply defaults for type, project, and priority if not extracted with high confidence
+    if (!result.type.value || result.type.confidence < 0.6) {
+      result.type = { value: 'Bug', confidence: 1.0, source: 'default' };
+      console.log('🔧 Applied default type: Bug');
+    }
+
+    if (!result.project.value || result.project.confidence < 0.6) {
+      result.project = { value: 'FV Demo (Issues)', confidence: 1.0, source: 'default' };
+      console.log('🔧 Applied default project: FV Demo (Issues)');
+    }
+
+    if (!result.priority.value || result.priority.confidence < 0.6) {
+      result.priority = { value: 'Medium', confidence: 1.0, source: 'default' };
+      console.log('🔧 Applied default priority: Medium');
+    }
+
+    return result;
+  }
+
   private logExtractionResults(extracted: ExtractedParameters): void {
     console.log('🎯 AI Extraction Results:');
     
     Object.entries(extracted).forEach(([key, param]) => {
-      if (param.value && param.confidence > 0.3) {
-        const confidenceIcon = param.confidence >= 0.8 ? '✅' : param.confidence >= 0.6 ? '🟡' : '🟠';
-        console.log(`   ${confidenceIcon} ${key}: "${param.value}" (${(param.confidence * 100).toFixed(0)}%)`);
+      if (param.value) {
+        let icon = '❌';
+        if (param.source === 'default') {
+          icon = '🔧'; // Default value
+        } else if (param.confidence >= 0.8) {
+          icon = '✅'; // High confidence
+        } else if (param.confidence >= 0.6) {
+          icon = '🟡'; // Medium confidence
+        } else {
+          icon = '🟠'; // Low confidence
+        }
+        
+        const sourceLabel = param.source === 'default' ? ' (default)' : ` (${(param.confidence * 100).toFixed(0)}%)`;
+        console.log(`   ${icon} ${key}: "${param.value}"${sourceLabel}`);
       } else {
         console.log(`   ❌ ${key}: not detected`);
       }
@@ -169,16 +276,20 @@ DO NOT invent information. Only extract what is clearly present. Use null for mi
   }
 
   // Helper method to identify which parameters still need to be collected
+  // UPDATED: Only consider title and description as requiring follow-up questions
   identifyMissingParameters(extracted: ExtractedParameters, confidenceThreshold: number = 0.6): string[] {
     const missing: string[] = [];
     
-    Object.entries(extracted).forEach(([key, param]) => {
-      if (!param.value || param.confidence < confidenceThreshold) {
-        missing.push(key);
-      }
-    });
+    // Only check title and description for follow-up questions
+    if (!extracted.title.value || extracted.title.confidence < confidenceThreshold) {
+      missing.push('title');
+    }
+    
+    if (!extracted.description.value || extracted.description.confidence < confidenceThreshold) {
+      missing.push('description');
+    }
 
-    console.log(`📋 Missing parameters (confidence < ${confidenceThreshold * 100}%):`, missing);
+    console.log(`📋 Missing parameters requiring follow-up:`, missing);
     return missing;
   }
 
@@ -190,8 +301,8 @@ DO NOT invent information. Only extract what is clearly present. Use null for mi
     if (validated.type.value) {
       const validTypes = ['Bug', 'Task', 'Story', 'Epic'];
       if (!validTypes.includes(validated.type.value)) {
-        console.log(`⚠️  Invalid type "${validated.type.value}", marking as uncertain`);
-        validated.type.confidence = Math.min(validated.type.confidence, 0.3);
+        console.log(`⚠️  Invalid type "${validated.type.value}", using default: Bug`);
+        validated.type = { value: 'Bug', confidence: 1.0, source: 'default' };
       }
     }
 
@@ -199,26 +310,68 @@ DO NOT invent information. Only extract what is clearly present. Use null for mi
     if (validated.priority.value) {
       const validPriorities = ['Lowest', 'Low', 'Medium', 'High', 'Highest'];
       if (!validPriorities.includes(validated.priority.value)) {
-        console.log(`⚠️  Invalid priority "${validated.priority.value}", marking as uncertain`);
-        validated.priority.confidence = Math.min(validated.priority.confidence, 0.3);
+        console.log(`⚠️  Invalid priority "${validated.priority.value}", using default: Medium`);
+        validated.priority = { value: 'Medium', confidence: 1.0, source: 'default' };
       }
     }
 
-    // Validate project (basic check)
+    // Validate project with enhanced precision mapping
     if (validated.project.value) {
-      // Map common abbreviations to full names
+      const normalizedProject = validated.project.value.toLowerCase().trim();
+      
+      // Precise project mapping with exact matching
       const projectMapping: { [key: string]: string } = {
+        // FV Demo Product variations
+        'fv demo product': 'FV Demo (Product)',
+        'demo product': 'FV Demo (Product)',
+        'fv demo (product)': 'FV Demo (Product)',
+        'dpd': 'FV Demo (Product)',
+        
+        // FV Demo Issues variations  
+        'fv demo issues': 'FV Demo (Issues)',
+        'demo issues': 'FV Demo (Issues)',
+        'fv demo (issues)': 'FV Demo (Issues)',
         'demo': 'FV Demo (Issues)',
         'fvdemo': 'FV Demo (Issues)',
+        'dpi': 'FV Demo (Issues)',
+        'issues': 'FV Demo (Issues)',
+        
+        // FV Engineering variations
+        'fv engineering': 'FV Engineering',
         'engineering': 'FV Engineering',
         'eng': 'FV Engineering',
-        'product': 'FV Product'
+        
+        // FV Product variations (distinct from demo product)
+        'fv product': 'FV Product',
+        'prod': 'FV Product'
       };
 
-      const normalizedProject = validated.project.value.toLowerCase();
+      // Check for exact matches first
       if (projectMapping[normalizedProject]) {
-        validated.project.value = projectMapping[normalizedProject];
-        console.log(`📂 Mapped project "${normalizedProject}" → "${validated.project.value}"`);
+        const mappedProject = projectMapping[normalizedProject];
+        console.log(`📂 Mapped project "${normalizedProject}" → "${mappedProject}"`);
+        validated.project.value = mappedProject;
+      } else {
+        // If no exact match, check if it's already a valid full project name
+        const validFullNames = ['FV Demo (Product)', 'FV Demo (Issues)', 'FV Engineering', 'FV Product'];
+        const matchingFullName = validFullNames.find(name => 
+          name.toLowerCase() === normalizedProject || 
+          normalizedProject === name
+        );
+        
+        if (matchingFullName) {
+          console.log(`📂 Validated full project name: "${matchingFullName}"`);
+          validated.project.value = matchingFullName;
+        } else {
+          // Handle special cases for partial matches that might be ambiguous
+          if (normalizedProject === 'product' || normalizedProject === 'fv') {
+            console.log(`⚠️  Ambiguous project "${normalizedProject}", using default: FV Demo (Issues)`);
+            validated.project = { value: 'FV Demo (Issues)', confidence: 1.0, source: 'default' };
+          } else {
+            console.log(`⚠️  Unknown project "${normalizedProject}", using default: FV Demo (Issues)`);
+            validated.project = { value: 'FV Demo (Issues)', confidence: 1.0, source: 'default' };
+          }
+        }
       }
     }
 
