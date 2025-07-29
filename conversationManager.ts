@@ -59,7 +59,7 @@ export class ConversationManager {
       const extracted = await this.aiExtractor.extractParameters(userInput);
       const validated = this.aiExtractor.validateExtractedParameters(extracted);
       
-      // Phase 2: Identify Missing Parameters
+      // Phase 2: Identify Missing Parameters (ONLY title and description now)
       const missing = this.aiExtractor.identifyMissingParameters(validated, 0.6);
       
       // Store extraction results
@@ -71,7 +71,7 @@ export class ConversationManager {
       
       // Phase 4: Route Based on Completeness
       if (missing.length === 0) {
-        console.log('🎉 All parameters extracted! Ready to create issue.');
+        console.log('🎉 All parameters available! Ready to create issue.');
         return { action: 'create_issue' };
       } else {
         console.log(`📋 Need to collect ${missing.length} missing parameter(s): ${missing.join(', ')}`);
@@ -245,26 +245,44 @@ export class ConversationManager {
   }
 
   private convertExtractedToIssueData(extracted: ExtractedParameters, state: ConversationState): void {
-    // Convert high-confidence extracted parameters to issueData
-    if (extracted.title.value && extracted.title.confidence >= 0.6) {
+    // Convert extracted parameters to issueData
+    // Always include values (with defaults already applied by AIParameterExtractor)
+    if (extracted.title.value) {
       state.issueData.title = extracted.title.value;
     }
-    if (extracted.type.value && extracted.type.confidence >= 0.6) {
+    if (extracted.type.value) {
       state.issueData.issueType = extracted.type.value;
     }
-    if (extracted.project.value && extracted.project.confidence >= 0.6) {
+    if (extracted.project.value) {
       state.issueData.project = extracted.project.value;
     }
-    if (extracted.priority.value && extracted.priority.confidence >= 0.6) {
+    if (extracted.priority.value) {
       state.issueData.priority = extracted.priority.value;
     }
-    if (extracted.description.value && extracted.description.confidence >= 0.6) {
+    if (extracted.description.value) {
       state.issueData.description = extracted.description.value;
     }
   }
 
   private processParameterResponse(userInput: string, parameter: string, state: ConversationState): boolean {
     switch (parameter) {
+      case 'title':
+        const title = this.extractor.extractTitleFromResponse(userInput);
+        if (title) {
+          state.issueData.title = title;
+          console.log(`📝 Title collected: ${title}`);
+          return true;
+        }
+        break;
+        
+      case 'description':
+        const description = this.extractor.extractDescriptionFromResponse(userInput);
+        state.issueData.description = description;
+        console.log(`📄 Description collected: ${description ? 'provided' : 'skipped'}`);
+        return true;
+        
+      // NOTE: We no longer collect project, type, or priority via follow-up questions
+      // They use defaults now, but keeping the cases for backward compatibility
       case 'project':
         const project = this.extractor.extractProjectFromResponse(userInput);
         if (project) {
@@ -283,21 +301,6 @@ export class ConversationManager {
         }
         break;
         
-      case 'title':
-        const title = this.extractor.extractTitleFromResponse(userInput);
-        if (title) {
-          state.issueData.title = title;
-          console.log(`📝 Title collected: ${title}`);
-          return true;
-        }
-        break;
-        
-      case 'description':
-        const description = this.extractor.extractDescriptionFromResponse(userInput);
-        state.issueData.description = description;
-        console.log(`📄 Description collected: ${description ? 'provided' : 'skipped'}`);
-        return true;
-        
       case 'priority':
         const priority = this.extractor.extractPriorityFromResponse(userInput);
         if (priority) {
@@ -313,14 +316,15 @@ export class ConversationManager {
 
   private generateQuestionForParameter(parameter: string, contextPhrase: string): string {
     switch (parameter) {
+      case 'title':
+        return `${contextPhrase}. What should be the title of this issue?`;
+      case 'description':
+        return `${contextPhrase}. Please provide a description for this issue (or say 'skip' to leave it empty).`;
+      // Keep these for backward compatibility, though they shouldn't be called in the new flow
       case 'project':
         return `${contextPhrase}. Which project should this go in? (FV Product, FV Engineering, FV Demo (Issues), or FV Demo (Product))`;
       case 'type':
         return `${contextPhrase}. What type of issue should this be? (Bug, Task, Story, or Epic)`;
-      case 'title':
-        return `${contextPhrase}. What should be the title of this issue?`;
-      case 'description':
-        return `${contextPhrase}. Please provide a description for this issue.`;
       case 'priority':
         return `${contextPhrase}. What priority should this have? (Lowest, Low, Medium, High, or Highest)`;
       default:
@@ -360,16 +364,18 @@ export class ConversationManager {
   }
 
   private displayAIExtractedSummary(state: ConversationState): void {
-    console.log('\n📋 Issue Summary (AI + Follow-up):');
+    console.log('\n📋 Issue Summary:');
     console.log('══════════════════════════════════════');
     
     if (state.issueData.project) {
-      const source = state.extractedParameters?.project?.confidence >= 0.6 ? '🤖' : '💬';
+      const source = state.extractedParameters?.project?.source === 'default' ? '🔧' :
+                     state.extractedParameters?.project?.confidence >= 0.6 ? '🤖' : '💬';
       console.log(`📂 Project: ${state.issueData.project} ${source}`);
     }
     
     if (state.issueData.issueType) {
-      const source = state.extractedParameters?.type?.confidence >= 0.6 ? '🤖' : '💬';
+      const source = state.extractedParameters?.type?.source === 'default' ? '🔧' :
+                     state.extractedParameters?.type?.confidence >= 0.6 ? '🤖' : '💬';
       console.log(`🏷️  Type: ${state.issueData.issueType} ${source}`);
     }
     
@@ -379,7 +385,8 @@ export class ConversationManager {
     }
     
     if (state.issueData.priority) {
-      const source = state.extractedParameters?.priority?.confidence >= 0.6 ? '🤖' : '💬';
+      const source = state.extractedParameters?.priority?.source === 'default' ? '🔧' :
+                     state.extractedParameters?.priority?.confidence >= 0.6 ? '🤖' : '💬';
       console.log(`⚡ Priority: ${state.issueData.priority} ${source}`);
     }
     
@@ -392,7 +399,7 @@ export class ConversationManager {
     }
     
     console.log('══════════════════════════════════════');
-    console.log('🤖 = AI extracted, 💬 = Follow-up question');
+    console.log('🤖 = AI extracted, 🔧 = Default value, 💬 = Follow-up question');
   }
 
   formatSuccessMessage(result: any, issueData: any): string {
