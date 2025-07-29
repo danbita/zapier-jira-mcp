@@ -3,13 +3,17 @@ import {
   IssueData, 
   ZapierJiraCreateIssueArgs, 
   ZapierJiraSearchArgs, 
+  ZapierJiraProjectSearchArgs,
   JiraIssue,
+  JiraProject,
   MCPToolResult 
 } from './types';
 
 export class ZapierService {
   private mcpClient: MCPClient;
   private isInitialized: boolean = false;
+  private availableProjects: JiraProject[] = [];
+  private projectCache: Map<string, JiraProject> = new Map();
 
   constructor() {
     this.mcpClient = new MCPClient();
@@ -24,10 +28,311 @@ export class ZapierService {
       await this.mcpClient.connect();
       this.isInitialized = true;
       console.log('🚀 Zapier service initialized successfully');
+      
+      // Try to cache available projects for better project resolution
+      await this.cacheAvailableProjects();
     } catch (error) {
       console.error('Failed to initialize Zapier service:', error);
       throw error;
     }
+  }
+
+  async testConnection(): Promise<void> {
+    console.log('🚀 Zapier service connection ready');
+  }
+
+  // NEW: Cache available projects to improve project resolution
+  private async cacheAvailableProjects(): Promise<void> {
+    try {
+      console.log('📂 Caching available projects...');
+      
+      // Try to search for known projects to cache them
+      const knownProjects = [
+        'FV Demo (Issues)',
+        'FV Demo (Product)', 
+        'FV Engineering',
+        'FV Product'
+      ];
+
+      for (const projectName of knownProjects) {
+        try {
+          const project = await this.validateAndFindProject(projectName);
+          if (project) {
+            this.projectCache.set(projectName.toLowerCase(), project);
+            this.projectCache.set(project.key.toLowerCase(), project);
+            console.log(`✅ Cached project: ${project.name} (${project.key})`);
+          }
+        } catch (error) {
+          console.log(`⚠️  Could not cache project "${projectName}": ${error}`);
+        }
+      }
+
+      console.log(`📂 Cached ${this.projectCache.size / 2} projects successfully`);
+    } catch (error) {
+      console.warn('⚠️  Could not cache projects, will validate dynamically:', error);
+    }
+  }
+
+  async fetchAndCacheProjects(): Promise<void> {
+    if (!this.isInitialized) {
+      console.warn('⚠️  Cannot fetch projects: Zapier service not initialized');
+      return;
+    }
+
+    await this.cacheAvailableProjects();
+  }
+
+  getAvailableProjects(): JiraProject[] {
+    return [...this.availableProjects];
+  }
+
+  // IMPROVED: Better project validation with caching and multiple search strategies
+  async validateAndFindProject(userInput: string): Promise<JiraProject | null> {
+    if (!userInput || !this.isInitialized) {
+      return null;
+    }
+
+    console.log(`🔍 Validating project: "${userInput}"`);
+
+    // First check cache
+    const cacheKey = userInput.toLowerCase();
+    if (this.projectCache.has(cacheKey)) {
+      const cached = this.projectCache.get(cacheKey)!;
+      console.log(`✅ Found cached project: ${cached.name} (${cached.key})`);
+      return cached;
+    }
+
+    try {
+      // Strategy 1: Direct search with user input
+      let project = await this.searchProjectDirectly(userInput);
+      if (project) {
+        this.cacheProject(project, userInput);
+        return project;
+      }
+
+      // Strategy 2: Try with common abbreviation expansions
+      const expandedNames = this.expandAbbreviation(userInput);
+      for (const expandedName of expandedNames) {
+        console.log(`🔍 Trying expanded name: "${expandedName}"`);
+        project = await this.searchProjectDirectly(expandedName);
+        if (project) {
+          this.cacheProject(project, userInput);
+          return project;
+        }
+      }
+
+      // Strategy 3: Try searching by project key if it looks like one
+      if (this.looksLikeProjectKey(userInput)) {
+        project = await this.searchProjectByKey(userInput);
+        if (project) {
+          this.cacheProject(project, userInput);
+          return project;
+        }
+      }
+
+      console.log(`❌ No project found for: "${userInput}"`);
+      return null;
+
+    } catch (error) {
+      console.error(`❌ Error validating project "${userInput}":`, error);
+      return null;
+    }
+  }
+
+  // NEW: Search for project directly by name
+  private async searchProjectDirectly(projectName: string): Promise<JiraProject | null> {
+    try {
+      const result = await this.mcpClient.callTool({
+        name: 'jira_software_cloud_find_project',
+        arguments: {
+          instructions: `Search for project: ${projectName}`,
+          name: projectName
+        }
+      });
+
+      const responseText = this.extractResponseText(result);
+      const projects = this.parseProjectResponse(responseText);
+      
+      if (projects.length > 0) {
+        const project = projects[0];
+        console.log(`✅ Found project: ${project.name} (${project.key})`);
+        return project;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error(`Error searching for project "${projectName}":`, error);
+      return null;
+    }
+  }
+
+  // NEW: Search for project by key
+  private async searchProjectByKey(projectKey: string): Promise<JiraProject | null> {
+    try {
+      console.log(`🔍 Searching by project key: ${projectKey}`);
+      const result = await this.mcpClient.callTool({
+        name: 'jira_software_cloud_find_project',
+        arguments: {
+          instructions: `Find project with key: ${projectKey}`,
+          key: projectKey
+        }
+      });
+
+      const responseText = this.extractResponseText(result);
+      const projects = this.parseProjectResponse(responseText);
+      
+      if (projects.length > 0) {
+        const project = projects[0];
+        console.log(`✅ Found project by key: ${project.name} (${project.key})`);
+        return project;
+      }
+      
+      return null;
+    } catch (error) {
+      console.error(`Error searching for project key "${projectKey}":`, error);
+      return null;
+    }
+  }
+
+  // NEW: Cache a project with multiple keys
+  private cacheProject(project: JiraProject, originalInput: string): void {
+    this.projectCache.set(originalInput.toLowerCase(), project);
+    this.projectCache.set(project.name.toLowerCase(), project);
+    this.projectCache.set(project.key.toLowerCase(), project);
+  }
+
+  // NEW: Check if input looks like a project key
+  private looksLikeProjectKey(input: string): boolean {
+    // Project keys are typically uppercase letters, sometimes with numbers
+    return /^[A-Z][A-Z0-9]*$/i.test(input) && input.length >= 2 && input.length <= 10;
+  }
+
+  // Parse the project response from find_project tool
+  private parseProjectResponse(responseText: string): JiraProject[] {
+    try {
+      // Try parsing as JSON first
+      const response = JSON.parse(responseText);
+      
+      if (response.results && Array.isArray(response.results) && response.results.length > 0) {
+        return response.results.map((project: any) => ({
+          key: project.key || project.projectKey || project.name,
+          name: project.name || project.displayName || project.key,
+          id: project.id || project.key,
+          type: project.projectTypeKey || project.type || 'software'
+        }));
+      }
+
+      // If results is directly an array
+      if (Array.isArray(response) && response.length > 0) {
+        return response.map((project: any) => ({
+          key: project.key || project.projectKey || project.name,
+          name: project.name || project.displayName || project.key,
+          id: project.id || project.key,
+          type: project.projectTypeKey || project.type || 'software'
+        }));
+      }
+
+      // If it's a single project object
+      if (response.key || response.name) {
+        return [{
+          key: response.key || response.projectKey || response.name,
+          name: response.name || response.displayName || response.key,
+          id: response.id || response.key,
+          type: response.projectTypeKey || response.type || 'software'
+        }];
+      }
+      
+      return [];
+    } catch (parseError) {
+      // If JSON parsing fails, try to extract project info from text
+      console.log('JSON parsing failed, trying text extraction...');
+      return this.extractProjectFromText(responseText);
+    }
+  }
+
+  // NEW: Extract project info from text response
+  private extractProjectFromText(text: string): JiraProject[] {
+    const projects: JiraProject[] = [];
+    const lines = text.split('\n');
+    
+    for (const line of lines) {
+      // Look for patterns like "PROJECT_KEY: Project Name" or "Project Name (PROJECT_KEY)"
+      const keyNameMatch = line.match(/([A-Z][A-Z0-9]*)\s*[:.-]\s*(.+)/i);
+      const nameKeyMatch = line.match(/(.+?)\s*\(([A-Z][A-Z0-9]*)\)/i);
+      
+      if (keyNameMatch) {
+        projects.push({
+          key: keyNameMatch[1].trim(),
+          name: keyNameMatch[2].trim(),
+          id: keyNameMatch[1].trim(),
+          type: 'software'
+        });
+      } else if (nameKeyMatch) {
+        projects.push({
+          key: nameKeyMatch[2].trim(),
+          name: nameKeyMatch[1].trim(),
+          id: nameKeyMatch[2].trim(),
+          type: 'software'
+        });
+      }
+    }
+    
+    return projects;
+  }
+
+  // IMPROVED: Better project name expansions
+  private expandAbbreviation(input: string): string[] {
+    const lowerInput = input.toLowerCase().trim();
+    const expansions: string[] = [];
+
+    // Enhanced mapping with more variations
+    const expansionMap: { [key: string]: string[] } = {
+      'demo': ['FV Demo (Issues)', 'FV Demo (Product)', 'Demo'],
+      'demo issues': ['FV Demo (Issues)'],
+      'demo product': ['FV Demo (Product)'],
+      'issues': ['FV Demo (Issues)'],
+      'product': ['FV Product', 'FV Demo (Product)'],
+      'engineering': ['FV Engineering'],
+      'eng': ['FV Engineering'],
+      'fv': ['FV Product', 'FV Engineering', 'FV Demo (Issues)', 'FV Demo (Product)'],
+      'fv demo': ['FV Demo (Issues)', 'FV Demo (Product)'],
+      'fv product': ['FV Product'],
+      'fv engineering': ['FV Engineering'],
+      // Common project keys
+      'dpi': ['FV Demo (Issues)'],
+      'dpd': ['FV Demo (Product)'],
+      'prod': ['FV Product']
+    };
+
+    if (expansionMap[lowerInput]) {
+      expansions.push(...expansionMap[lowerInput]);
+    }
+
+    // Try with "FV" prefix if not already present
+    if (!lowerInput.startsWith('fv')) {
+      expansions.push(`FV ${input}`);
+      expansions.push(`FV ${input} (Issues)`);
+      expansions.push(`FV ${input} (Product)`);
+    }
+
+    // Try variations with parentheses
+    if (!lowerInput.includes('(')) {
+      expansions.push(`${input} (Issues)`);
+      expansions.push(`${input} (Product)`);
+    }
+
+    return [...new Set(expansions)]; // Remove duplicates
+  }
+
+  formatProjectSelectionPrompt(): string {
+    const availableProjectNames = [
+      'FV Demo (Issues) - for bug reports and general issues',
+      'FV Demo (Product) - for product-related work',
+      'FV Engineering - for engineering tasks',
+      'FV Product - for product management'
+    ];
+
+    return `Which project should this issue be created in?\n\nAvailable projects:\n${availableProjectNames.map((p, i) => `   ${i + 1}. ${p}`).join('\n')}\n\nYou can use full project names, abbreviations (demo, eng, product), or project keys:`;
   }
 
   async cleanup(): Promise<void> {
@@ -50,14 +355,26 @@ export class ZapierService {
       throw new Error('Title/Summary is required to create a Jira issue');
     }
 
+    // IMPROVED: Validate project before creating issue
+    console.log(`🔍 Validating project "${issueData.project}" before creating issue...`);
+    const validProject = await this.validateAndFindProject(issueData.project);
+    
+    if (!validProject) {
+      throw new Error(`Invalid project: "${issueData.project}". Please use one of: FV Demo (Issues), FV Demo (Product), FV Engineering, FV Product`);
+    }
+
+    // Use the validated project name/key
+    const projectToUse = validProject.key || validProject.name;
+    console.log(`✅ Using validated project: ${validProject.name} (${validProject.key})`);
+
     const args: ZapierJiraCreateIssueArgs = {
       instructions: `Create a new Jira issue with the following details. IMPORTANT: Do not change or guess any values, use exactly what is specified:
-        - Project: ${issueData.project}
+        - Project: ${projectToUse}
         - Summary: ${issueData.title}
         - Description: ${issueData.description || 'No description provided'}
         - Issue Type: ${issueData.issueType || 'Task'}
-        - Priority: ${issueData.priority || 'Medium'} (MANDATORY: Set priority to exactly "${issueData.priority}", do not use Medium or any other value)`,
-      project: issueData.project,
+        - Priority: ${issueData.priority || 'Medium'}`,
+      project: projectToUse,
       summary: issueData.title,
       description: issueData.description,
       issueType: issueData.issueType,
@@ -66,36 +383,22 @@ export class ZapierService {
 
     try {
       console.log('📝 Creating Jira issue via Zapier MCP...');
-      console.log('📋 Request parameters:');
-      console.log(`   - project: ${args.project}`);
-      console.log(`   - summary: ${args.summary}`);
-      console.log(`   - issueType: ${args.issueType}`);
-      console.log(`   - priority: ${args.priority} ⚠️  (Check if this appears in Jira)`);
-      console.log(`   - description: ${args.description?.substring(0, 50)}...`);
-      console.log('');
+      console.log(`📂 Project: ${projectToUse}`);
+      console.log(`📝 Summary: ${issueData.title}`);
+      console.log(`🏷️  Type: ${issueData.issueType || 'Task'}`);
+      console.log(`⚡ Priority: ${issueData.priority || 'Medium'}`);
       
       const result = await this.mcpClient.callTool({
         name: 'jira_software_cloud_create_issue',
         arguments: args
       });
 
-      console.log('📡 Received response from Zapier MCP');
-      
       if (result.isError) {
-        console.log('❌ MCP Client marked response as error');
         throw new Error(this.extractErrorMessage(result));
       }
 
       const responseText = this.extractResponseText(result);
-      console.log('📊 Response text length:', responseText.length, 'characters');
-      
       const parsedResult = this.parseCreatedIssueResponse(responseText);
-      
-      if (parsedResult.success) {
-        console.log('✅ Issue creation confirmed as successful');
-      } else {
-        console.log('❌ Issue creation confirmed as failed');
-      }
       
       return parsedResult;
       
@@ -116,7 +419,6 @@ export class ZapierService {
     };
 
     try {
-      console.log(`🔍 Searching for issues related to: "${query}"`);
       const result = await this.mcpClient.callTool({
         name: 'jira_software_cloud_find_issue',
         arguments: args
@@ -127,8 +429,6 @@ export class ZapierService {
       }
 
       const responseText = this.extractResponseText(result);
-      console.log('✅ Search completed');
-      
       return this.parseSearchResults(responseText);
       
     } catch (error) {
@@ -142,71 +442,32 @@ export class ZapierService {
       throw new Error('Zapier service not initialized. Call initialize() first.');
     }
 
-    // Create a search query combining title and description keywords
     const searchTerms = [title];
     if (description) {
-      // Extract key words from description (simple approach)
       const descWords = description.split(' ')
         .filter(word => word.length > 3)
-        .slice(0, 3); // Take first 3 meaningful words
+        .slice(0, 3);
       searchTerms.push(...descWords);
     }
 
     const searchQuery = searchTerms.join(' ');
     
     try {
-      console.log(`🔍 Looking for similar issues to: "${title}"`);
       const results = await this.searchJiraIssues(searchQuery);
       
-      // Filter results that might be similar (basic similarity check)
       const similarIssues = results.filter(issue => 
         this.calculateSimilarity(title, issue.summary || '') > 0.3
       );
-
-      if (similarIssues.length > 0) {
-        console.log(`📋 Found ${similarIssues.length} potentially similar issue(s)`);
-      } else {
-        console.log('✅ No similar issues found');
-      }
 
       return similarIssues;
       
     } catch (error) {
       console.error('Error finding similar issues:', error);
-      return []; // Return empty array instead of throwing, as this is a bonus feature
+      return [];
     }
   }
 
-  async getAvailableProjects(): Promise<string[]> {
-    if (!this.isInitialized) {
-      throw new Error('Zapier service not initialized. Call initialize() first.');
-    }
-
-    try {
-      console.log('📂 Fetching available projects...');
-      const result = await this.mcpClient.callTool({
-        name: 'jira_software_cloud_find_project',
-        arguments: {
-          instructions: 'List all available Jira projects',
-          searchByParameter: ''
-        }
-      });
-
-      if (result.isError) {
-        console.log('Could not fetch projects, using default suggestions');
-        return ['DEMO', 'TEST', 'PROJ']; // Fallback suggestions
-      }
-
-      const responseText = this.extractResponseText(result);
-      return this.parseProjectList(responseText);
-      
-    } catch (error) {
-      console.log('Could not fetch projects:', error);
-      return ['DEMO', 'TEST', 'PROJ']; // Fallback suggestions
-    }
-  }
-
-  // Utility methods for parsing responses
+  // Utility methods
   private extractResponseText(result: MCPToolResult): string {
     if (result.content && result.content.length > 0) {
       return result.content[0].text || '';
@@ -220,132 +481,56 @@ export class ZapierService {
   }
 
   private parseCreatedIssueResponse(responseText: string): any {
-    // Enhanced parsing to handle Zapier MCP JSON response format accurately
     try {
-      console.log('📋 Raw Zapier Response Length:', responseText.length, 'characters');
-      
-      // Try to parse as JSON first (Zapier returns structured JSON)
       let responseData;
       try {
         responseData = JSON.parse(responseText);
       } catch (parseError) {
-        console.log('⚠️  Response is not JSON, falling back to text parsing');
         return this.parseTextResponse(responseText);
       }
       
-      // Zapier MCP response structure analysis
-      console.log('📊 Response structure keys:', Object.keys(responseData));
-      
-      // Check what Zapier actually processed
-      if (responseData.execution && responseData.execution.resolvedParams) {
-        console.log('🔍 Zapier processed parameters:');
-        const resolvedParams = responseData.execution.resolvedParams;
-        Object.keys(resolvedParams).forEach(key => {
-          const param = resolvedParams[key];
-          console.log(`   ${key}: ${param.value} (${param.status})`);
-          if (key.includes('priority')) {
-            console.log(`   ⚠️  Priority processing: ${JSON.stringify(param)}`);
-          }
-        });
-      }
-      
-      // Check for successful Zapier MCP execution
       const execution = responseData.execution;
       const results = responseData.results;
       const issueUrl = responseData.issueUrl;
       
-      if (execution) {
-        console.log(`🔍 Execution status: ${execution.status}`);
+      if (execution && execution.status === 'SUCCESS') {
+        let issueData = null;
         
-        // SUCCESS status is the primary indicator
-        if (execution.status === 'SUCCESS') {
-          let issueData = null;
-          
-          // Extract issue details from results array
-          if (results && Array.isArray(results) && results.length > 0) {
-            issueData = results[0];
-            console.log(`📝 Issue created: ${issueData.key}`);
-            
-            // Debug URL extraction
-            console.log('🔗 URL Analysis:');
-            console.log(`   issueUrl from response: ${issueUrl}`);
-            console.log(`   self field: ${issueData?.self}`);
-            
-            // Try to find the correct browse URL pattern
-            const responseStr = JSON.stringify(responseData);
-            const urlMatches = responseStr.match(/https:\/\/[^"]+/g);
-            if (urlMatches) {
-              console.log('   Found URLs in response:', urlMatches.slice(0, 3)); // Show first 3
-            }
-          }
-          
-          const result = {
-            success: true,
-            key: issueData?.key || null,
-            url: issueUrl || this.constructIssueUrl(issueData?.key, responseData),
-            issueId: issueData?.id,
-            project: issueData?.fields?.project?.name || issueData?.fields?.project?.key,
-            summary: issueData?.fields?.summary,
-            status: issueData?.fields?.status?.name,
-            priority: issueData?.fields?.priority?.name,
-            issueType: issueData?.fields?.issuetype?.name,
-            created: issueData?.fields?.created,
-            response: this.buildSuccessMessage(issueData, issueUrl),
-            rawData: {
-              execution: execution,
-              issue: issueData,
-              fullResponse: responseData
-            }
-          };
-          
-          console.log('✅ Parsed as successful creation');
-          return result;
-          
-        } else if (execution.status === 'FAILED' || execution.status === 'ERROR') {
-          console.log('❌ Execution marked as failed');
-          return {
-            success: false,
-            error: `Zapier execution failed with status: ${execution.status}`,
-            response: execution.error || 'Unknown execution error',
-            rawData: responseData
-          };
-        } else {
-          console.log(`⚠️  Unknown execution status: ${execution.status}`);
-          return {
-            success: false,
-            error: `Unknown execution status: ${execution.status}`,
-            response: JSON.stringify(execution),
-            rawData: responseData
-          };
+        if (results && Array.isArray(results) && results.length > 0) {
+          issueData = results[0];
         }
+        
+        const result = {
+          success: true,
+          key: issueData?.key || null,
+          url: issueUrl || this.constructIssueUrl(issueData?.key, responseData),
+          issueId: issueData?.id,
+          project: issueData?.fields?.project?.name || issueData?.fields?.project?.key,
+          summary: issueData?.fields?.summary,
+          status: issueData?.fields?.status?.name,
+          priority: issueData?.fields?.priority?.name,
+          issueType: issueData?.fields?.issuetype?.name,
+          created: issueData?.fields?.created,
+          response: this.buildSuccessMessage(issueData, issueUrl)
+        };
+        
+        return result;
+        
+      } else if (execution && (execution.status === 'FAILED' || execution.status === 'ERROR')) {
+        return {
+          success: false,
+          error: `Zapier execution failed with status: ${execution.status}`,
+          response: execution.error || 'Unknown execution error'
+        };
       }
       
-      // If no execution object, check for direct results
-      if (results && Array.isArray(results) && results.length > 0) {
-        const issueData = results[0];
-        if (issueData.key) {
-          console.log('✅ Found issue data without execution status');
-          return {
-            success: true,
-            key: issueData.key,
-            url: issueUrl || this.constructIssueUrl(issueData.key),
-            response: `Issue ${issueData.key} appears to have been created`,
-            rawData: responseData
-          };
-        }
-      }
-      
-      // If we get here, the response structure is unexpected
-      console.log('⚠️  Unexpected response structure, falling back to text parsing');
       return this.parseTextResponse(responseText);
       
     } catch (error) {
-      console.error('💥 Error parsing JSON response:', error);
       return {
         success: false,
         error: `JSON parsing error: ${error.message}`,
-        response: responseText,
-        rawData: null
+        response: responseText
       };
     }
   }
@@ -380,11 +565,9 @@ export class ZapierService {
   private constructIssueUrl(issueKey: string, responseData?: any): string | null {
     if (!issueKey) return null;
     
-    // Try to extract the domain from the API response first
-    let domain = 'fankave.atlassian.net'; // Default fallback
+    let domain = 'fankave.atlassian.net';
     
     if (responseData) {
-      // Look for any atlassian.net domain in the response
       const responseStr = JSON.stringify(responseData);
       const domainMatch = responseStr.match(/https:\/\/([^.]+\.atlassian\.net)/);
       if (domainMatch) {
@@ -396,60 +579,44 @@ export class ZapierService {
   }
 
   private parseTextResponse(responseText: string): any {
-    // Fallback text parsing for non-JSON responses
-    console.log('📝 Parsing as text response');
-    
     try {
-      // Look for success indicators in text
       const hasSuccess = responseText.toLowerCase().includes('success') ||
                         responseText.includes('"status":"SUCCESS"') ||
                         responseText.toLowerCase().includes('created');
       
-      // Look for failure indicators  
       const hasFailure = responseText.toLowerCase().includes('error') ||
                         responseText.toLowerCase().includes('failed') ||
                         responseText.includes('"status":"FAILED"') ||
                         responseText.toLowerCase().includes('unable');
       
-      // Extract issue key pattern (e.g., PROJ-123, DEMO-456)
       const issueKeyMatch = responseText.match(/([A-Z]+-\d+)/);
       const issueKey = issueKeyMatch ? issueKeyMatch[1] : null;
       
-      // Extract URL patterns
       const urlMatch = responseText.match(/(https?:\/\/[^\s"]+browse\/[A-Z]+-\d+)/);
       const issueUrl = urlMatch ? urlMatch[1] : null;
       
-      // Determine success based on available indicators
       const success = (hasSuccess || issueKey !== null) && !hasFailure;
       
-      const result = {
+      return {
         success: success,
         key: issueKey,
         url: issueUrl,
         response: success ? 
           `Text parsing detected successful creation${issueKey ? ` of ${issueKey}` : ''}` :
           'Text parsing could not confirm successful creation',
-        error: hasFailure ? 'Text parsing detected failure indicators' : null,
-        rawData: responseText
+        error: hasFailure ? 'Text parsing detected failure indicators' : null
       };
       
-      console.log('📊 Text parsing result:', JSON.stringify(result, null, 2));
-      return result;
-      
     } catch (error) {
-      console.error('💥 Error in text parsing:', error);
       return {
         success: false,
         response: responseText,
-        error: `Text parsing error: ${error.message}`,
-        rawData: responseText
+        error: `Text parsing error: ${error.message}`
       };
     }
   }
 
   private parseSearchResults(responseText: string): any[] {
-    // Basic parsing - extract issue information from response
-    // This would need to be adapted based on actual Zapier response format
     try {
       const results = [];
       const lines = responseText.split('\n');
@@ -467,23 +634,11 @@ export class ZapierService {
       
       return results;
     } catch (error) {
-      console.log('Could not parse search results:', error);
       return [];
     }
   }
 
-  private parseProjectList(responseText: string): string[] {
-    // Extract project keys/names from response
-    try {
-      const projectMatches = responseText.match(/([A-Z]+)/g);
-      return projectMatches ? [...new Set(projectMatches)] : ['DEMO', 'TEST'];
-    } catch (error) {
-      return ['DEMO', 'TEST'];
-    }
-  }
-
   private calculateSimilarity(str1: string, str2: string): number {
-    // Simple similarity calculation (Jaccard similarity on words)
     const words1 = new Set(str1.toLowerCase().split(' '));
     const words2 = new Set(str2.toLowerCase().split(' '));
     
@@ -493,7 +648,6 @@ export class ZapierService {
     return intersection.size / union.size;
   }
 
-  // Status check
   isReady(): boolean {
     return this.isInitialized && this.mcpClient.isClientConnected();
   }
